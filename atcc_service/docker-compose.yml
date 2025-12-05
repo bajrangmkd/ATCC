@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: Dev@12345
+      MYSQL_DATABASE: atcc
+      MYSQL_USER: atcc
+      MYSQL_PASSWORD: Dev@12345
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+  atcc_service:
+    build: .
+    restart: always
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: atcc
+      DB_PASS: Dev@12345
+      DB_NAME: atcc
+      MODEL_PATH: /models/yolov11.pt
+      STORAGE_PATH: /storage
+      DETECTION_CONFIDENCE: 0.4
+    volumes:
+      - ./models:/models
+      - ./storage:/storage
+      - ./app:/app/app
+      - ./logs:/var/log/atcc
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mysql
+    # If you want GPU support, either:
+    #  - Add `--gpus all` when running with `docker run` manually, or
+    #  - Uncomment the following line if your Docker supports 'runtime: nvidia'
+    # runtime: nvidia
+
+volumes:
+  mysql_data:
+
