@@ -7,6 +7,7 @@ from app.config import settings
 # Use OpenCV to open RTSP. Provide backoff on failure.
 
 
+@retry(wait=wait_exponential(multiplier=1, min=2, max=10), stop=stop_after_attempt(3))
 def open_camera(rtsp_url: str, timeout: int = None):
-timeout = timeout or settings.CAMERA_CONNECT_TIMEOUT
-cap = cv2.VideoCapture(rtsp_ur
+	timeout = timeout or settings.CAMERA_CONNECT_TIMEOUT
+	cap = cv2.VideoCapture(rtsp_url)
