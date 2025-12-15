@@ -13,7 +13,7 @@ except ImportError:
     YOLO = None 
 
 # --- Vehicle Class Filtering ---
-VEHICLE_CLASSES = ['car', 'truck', 'bus', 'motorbike', 'auto','lcv'] 
+VEHICLE_CLASSES = ['car', 'truck', 'bus', 'bike', 'auto','lcv'] 
 
 
 class Model: # Renamed from DummyModel to Model to hold the new logic

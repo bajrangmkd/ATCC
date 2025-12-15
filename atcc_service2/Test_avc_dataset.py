@@ -5,10 +5,10 @@ import numpy as np
 from ultralytics import YOLO
 
 # Initialize model
-model = YOLO(r"atcc_service2/models/atcc_model.pt")
+model = YOLO(r"D:\ATCC\atcc_service2\models\atcc_model.pt")
 
 # RTSP stream URL
-rtsp_url = r"rtsp://admin:Anpr@123@103.255.232.34:8570/1736704"
+rtsp_url = r"D:\ATCC\atcc_service2\video\video.mp4"
 cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
 
 # Check RTSP stream
