@@ -1,0 +1,20 @@
+CREATE USER 'atcc'@'localhost' IDENTIFIED BY 'Dev@12345';
+CREATE USER 'atcc'@'localhost' IDENTIFIED BY 'Dev@12345';
+
+GRANT ALL PRIVILEGES ON atcc.* TO 'atcc'@'localhost';
+
+
+
+CREATE USER 'atcc'@'127.0.0.1' IDENTIFIED BY 'Dev@12345';
+GRANT ALL PRIVILEGES ON atcc.* TO 'atcc'@'127.0.0.1';
+FLUSH PRIVILEGES;
+
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+
+
+
+

@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pymysql
+python-dotenv
+tenacity
+opencv-python-headless
+shapely
+pillow
+aiofiles
