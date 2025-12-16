@@ -1,13 +1,21 @@
+# --- File: app/main.py (FINAL UPDATED VERSION) ---
+
 import threading
 import time
 import traceback
 from typing import Dict, Any, Optional, AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+# *** NEW IMPORTS FOR DATA TRANSFER API ***
+from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from app.live import router as live_router
+# Import the schemas for request body validation
+from app.schemas import VehicleDataPayload
+# Lazy import DB function (will be imported inside the route function body)
+# from app.db import insert_vehicle_transfer_data 
+# *****************************************
 
 
 # NOTE: we intentionally avoid importing app.db at module import time to prevent
@@ -19,7 +27,7 @@ _camera_stop_flags: Dict[int, threading.Event] = {}
 _poll_thread: Optional[threading.Thread] = None
 _shutdown_event = threading.Event()
 
-POLL_INTERVAL_SECONDS = 20  # how often to poll DB for camera list changes
+POLL_INTERVAL_SECONDS = 20 # how often to poll DB for camera list changes
 
 
 def load_enabled_cameras_from_db():
@@ -42,7 +50,7 @@ def load_enabled_cameras_from_db():
                     continue
                 cameras.append({
                     "camera_id": cam_id,
-                    "camera_name": m.get("camera_name"),
+                    "camera_name": m.get("camera_name"), # <-- This retrieves the name
                     "rtsp_url": m.get("rtsp_url"),
                     "roi": m.get("roi"),
                 })
@@ -58,7 +66,7 @@ def start_camera_worker(camera: Dict[str, Any]):
     """
     cam_id = camera["camera_id"]
     if cam_id in _camera_threads:
-        return  # already running
+        return # already running
 
     stop_event = threading.Event()
     _camera_stop_flags[cam_id] = stop_event
@@ -275,7 +283,37 @@ def health():
     }
     return payload
 
-# create FastAPI app with lifespan (The previous definition was redundant, removed)
-
 # <-- add this line to register the live stream router you imported above
 app.include_router(live_router, prefix="/live")
+
+
+# =====================================================================
+# === NEW API ENDPOINT FOR EXTERNAL DATA TRANSFER ===
+# =====================================================================
+
+@app.post("/api/v1/vehicle/data", status_code=status.HTTP_200_OK)
+def receive_vehicle_data(payload: VehicleDataPayload):
+    """
+    Receives and processes bulk vehicle data records sent from an external device or service.
+    """
+    
+    # Lazy import DB function inside the function body
+    from app.db import insert_vehicle_transfer_data
+
+    # 1. Database Insertion
+    try:
+        inserted_count = insert_vehicle_transfer_data(payload)
+    except Exception as e:
+        # Handle database connection or write failures
+        print(f"Error processing vehicle data payload: {e}")
+        # Re-raise as HTTPException for a proper HTTP 500 response
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save data to the database. Error: {e}"
+        )
+    
+    return {
+        "status": "success",
+        "message": f"Successfully processed and inserted {inserted_count} vehicle records.",
+        "records_received": len(payload.vehicleData)
+    }

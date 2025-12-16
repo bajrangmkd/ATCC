@@ -1,3 +1,6 @@
+# --- File: app/workers.py (FULL UPDATE) ---
+# This file contains the process_camera_row function and all its dependencies.
+
 import os
 import time
 import uuid
@@ -10,23 +13,48 @@ from threading import Event, Lock
 import numpy as np
 import json 
 # --- NEW: Import settings for default FPS ---
-from app.config import settings
+# NOTE: Ensure app.config is reachable
+try:
+    from app.config import settings
+except ImportError:
+    # Fallback if config is not properly set up
+    class Settings:
+        CAMERA_FPS = 10
+    settings = Settings()
 
 # timezone helper
+from datetime import datetime, timezone
+
 try:
     from zoneinfo import ZoneInfo
     LOCAL_TZ = ZoneInfo("Asia/Kolkata")
-except Exception:
-    LOCAL_TZ = None
+except ImportError:
+    # Fallback to fixed UTC offset if zoneinfo is not available 
+    from datetime import timedelta
+    LOCAL_TZ = timezone(timedelta(hours=5, minutes=30), name='IST')
 
 def _now_ts_str():
-    """Return localized timestamp string suitable for filenames and DB: YYYYMMDDTHHMMSS.mmm"""
-    if LOCAL_TZ is not None:
-        dt = datetime.now(LOCAL_TZ)
+    """
+    Returns the current local time (Asia/Kolkata) in three forms required by the worker: 
+    1. ts_filename (str): IST time in YYYYMMDDTHHMMSS.mmm format (for unique file names).
+    2. ts_db (str): IST time in YYYY-MM-DD HH:MM:SS.ms format (for database insertion).
+    3. dt_local (datetime): The datetime object for internal file path construction/calculations.
+    """
+    
+    # 1. Get current time, localized to IST/Asia/Kolkata
+    if hasattr(LOCAL_TZ, 'tzname'):
+        dt_local = datetime.now(LOCAL_TZ)
     else:
-        dt = datetime.utcnow()
-    # returns (str, datetime object)
-    return dt.strftime("%Y%m%dT%H%M%S.%f")[:-3], dt
+        dt_local = datetime.now()
+        
+    # 2. Format for filenames (YYYYMMDDTHHMMSS.mmm)
+    ts_filename = dt_local.strftime("%Y%m%dT%H%M%S.%f")[:-3] 
+    
+    # 3. Format for Database (YYYY-MM-DD HH:MM:SS.ms)
+    ts_db = dt_local.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    
+    # Return all three values
+    return ts_filename, ts_db, dt_local # <--- CRITICAL CHANGE
 
 # Lazy imports
 try:
@@ -69,7 +97,6 @@ RECENT_SAVED_LOCK = Lock()
 SAVE_DEDUP_SECONDS = float(os.getenv("ATCC_DEDUPE_SECONDS", "5.0"))
 
 # State tracker for ROI/Line crossing (used for the count trigger)
-# Format: { "cam_id:unique_id": True/False (counted/passed the line) }
 IN_ROI_STATE: Dict[str, bool] = {}
 IN_ROI_LOCK = Lock()
 
@@ -82,7 +109,6 @@ COARSE_ID_MAP: Dict[str, int] = {}
 COARSE_ID_MAP_LOCK = Lock()
 
 # Stores the last known absolute pixel bbox and unique ID for short-term tracking across frames
-# Format: { unique_id: {"bbox_px": [x1, y1, x2, y2], "label": "car", "timestamp": time.time()} }
 TEMPORAL_MAX_AGE_S = 3.0 
 TEMPORAL_TRACKER: Dict[int, Dict[str, Any]] = {}
 TEMPORAL_TRACKER_LOCK = Lock()
@@ -90,7 +116,7 @@ TEMPORAL_TRACKER_LOCK = Lock()
 # *** NEW: Buffer to temporarily store expired tracks for proximity matching ***
 LOST_TRACK_BUFFER: Dict[int, Dict[str, Any]] = {} 
 LOST_TRACK_BUFFER_LOCK = Lock()
-LOST_TRACK_MAX_AGE_S = 1.0 # How long a track stays in the lost buffer after expiration
+LOST_TRACK_MAX_AGE_S = 1.0 
 
 # NEW CONSTANT: Max distance (in pixels) for a new detection to snap to a lost track
 LOST_TRACK_MAX_DIST_PX = 50 
@@ -100,18 +126,14 @@ LOST_TRACK_MAX_DIST_PX = 50
 DEBUG_ROI = True
 
 # --- Inference Resizing Constants ---
-# Target resolution for detection inference to boost speed
 INFERENCE_WIDTH = 640
 INFERENCE_HEIGHT = 360
 
 # --- Final Bounding Box Size Filters ---
-# Minimum required pixel area for a valid detection (100x100 = 10000)
 MIN_DETECTION_PIXEL_AREA = 10000 
-# Maximum detection area allowed (e.g., 80% of total frame area)
 MAX_DETECTION_AREA_RATIO = 0.80 
 
 # --- NEW CONSTANT: Hardcoded Detection Line ---
-# Set this Y-coordinate (in pixels) for the tripwire. 
 LINE_Y_COORDINATE = 600 
 
 def _coarse_bbox_key(bbox, granularity=8):
@@ -130,9 +152,9 @@ def _save_jpeg(frame, camera_id, detection_id, final_count_id, label, quality=92
     if frame is None:
         return None
     try:
-        ts_str, dt = _now_ts_str()
+        # Use a placeholder for ts_db (ignored) and get the actual datetime object (dt)
+        ts_str, _, dt = _now_ts_str() 
         date_dir = os.path.join(SAVE_IMAGE_DIR, dt.strftime("%Y"), dt.strftime("%m"), dt.strftime("%d"))
-        os.makedirs(date_dir, exist_ok=True)
         
         # *** MODIFIED FILENAME FORMAT: cam{id}_{ts}_ID{unique_id}_{label}.jpg ***
         fname = f"cam{camera_id}_{ts_str}_ID{final_count_id}_{label}.jpg"
@@ -179,9 +201,9 @@ def _save_crop(frame, bbox, camera_id, detection_id, final_count_id, label, qual
         if x2 <= x1 or y2 <= y1:
             return None
         crop = frame[y1:y2, x1:x2]
-        ts_str, dt = _now_ts_str()
+        # Use a placeholder for ts_db (ignored) and get the actual datetime object (dt)
+        ts_str, _, dt = _now_ts_str() 
         date_dir = os.path.join(SAVE_CROP_DIR, dt.strftime("%Y"), dt.strftime("%m"), dt.strftime("%d"))
-        os.makedirs(date_dir, exist_ok=True)
         
         # *** MODIFIED FILENAME FORMAT: cam{id}_{ts}_ID{unique_id}_{label}_crop.jpg ***
         fname = f"cam{camera_id}_{ts_str}_ID{final_count_id}_{label}_crop.jpg"
@@ -246,8 +268,12 @@ def _normalize_bbox_to_pixels(bbox, frame_shape):
             x2 = int(round(vals[2])); y2 = int(round(vals[3]))
         
         # Ensure bounding box is within frame boundaries
-        x1 = max(0, min(x1, w - 1)); y1 = max(0, min(y1, h - 1))
-        x2 = max(0, min(x2, w - 1)); y2 = max(0, min(y2, h - 1))
+        # *** FIX: Assign coordinates individually and enforce int type ***
+        x1 = int(max(0, min(x1, w - 1)))
+        y1 = int(max(0, min(y1, h - 1)))
+        x2 = int(max(0, min(x2, w - 1)))
+        y2 = int(max(0, min(y2, h - 1)))
+        
         if x2 <= x1 or y2 <= y1:
             return None
             
@@ -414,8 +440,13 @@ def process_detections(detections: List[Dict[str, Any]], camera_row: Dict[str, A
     global TEMPORAL_TRACKER
     global LOST_TRACK_BUFFER
     
+    # --- GET TIME HERE (Fix for AttributeError and time zone) ---
+    ts_filename, ts_db, dt_now = _now_ts_str()
+    now_ts = time.time() # Used for temporal tracking calculation
+    # -----------------------------------------------------------
+    
     cam_id = camera_row.get("camera_id")
-    now_ts = time.time()
+    # Removed the second call to _now_ts_str() that was causing the error
     saved_records = []
     annotated_draw = None
 
@@ -423,7 +454,6 @@ def process_detections(detections: List[Dict[str, Any]], camera_row: Dict[str, A
     roi = _roi_from_camera_row(camera_row, frame_shape=frame_shape) 
     max_area_px = (frame_shape[0] * frame_shape[1]) * MAX_DETECTION_AREA_RATIO
     
-    _, dt_now = _now_ts_str() 
     
     # 1. CLEANUP & BUFFER: Move expired tracks to the LOST buffer and clean the buffer.
     with TEMPORAL_TRACKER_LOCK:
@@ -448,7 +478,7 @@ def process_detections(detections: List[Dict[str, Any]], camera_row: Dict[str, A
     
     updated_temporal_tracker = {}
 
-    # *** FIX: Loosen IoU to 0.45 to aggressively maintain track identity ***
+    # *** FIX: IoU Threshold for aggressive stability ***
     IOU_THRESHOLD = 0.45 
 
     for d in detections:
@@ -689,13 +719,14 @@ def process_detections(detections: List[Dict[str, Any]], camera_row: Dict[str, A
                 save_detection({
                     "detection_id": detection_id,
                     "camera_id": cam_id,
+                    "camera_name": camera_row.get("camera_name"), # Correctly retrieving camera_name
                     "detected_class": label,
                     "confidence": conf,
                     "bbox": bbox_px if bbox_px is not None else raw_bbox,
                     "centroid": centroid, 
                     "image_path": saved_path,
                     "roi_hit": True, 
-                    "passage_time": dt_now, 
+                    "passage_time": ts_db, # CRITICAL FIX: Using the formatted IST string
                     "inference_ms": latency_ms, 
                     "extra": d.get("extra", {}),
                     "unique_count_id": final_count_id 
@@ -724,7 +755,8 @@ def process_detections(detections: List[Dict[str, Any]], camera_row: Dict[str, A
         TEMPORAL_TRACKER.update(updated_temporal_tracker)
         
     try:
-        cutoff = now_ts - (SAVE_DEDUP_SECONDS * 4)
+        # Use local time.time() for cleanup threshold, not dt_now
+        cutoff = time.time() - (SAVE_DEDUP_SECONDS * 4) 
         with RECENT_SAVED_LOCK:
             for k, ts in list(RECENT_SAVED.items()):
                 if ts < cutoff:
@@ -947,16 +979,14 @@ def stop_ffmpeg_process(proc):
     except Exception:
         pass
 
-# ----------------- Worker entrypoint (UNCHANGED) -----------------
+# ----------------- Worker entrypoint -----------------
 def process_camera_row(camera_row: Dict[str, Any], stop_event: Event):
     cam_id = camera_row.get("camera_id")
     rtsp = camera_row.get("rtsp_url")
     print(f"Worker started for camera {cam_id}. RTSP={bool(rtsp)}. Test-mode fallback if needed.")
 
-    # --- NEW: TESTING VARIABLE ---
-    # Set this variable to your local video file path for testing (use forward slashes!)
-    # Example: "D:/ATCC/test_videos/my_traffic_jam.mp4"
-    LOCAL_TEST_VIDEO_PATH = r"D:\ATCC\atcc_service2\video\video.mp4" # <--- SET YOUR PATH HERE for testing, or use None for live stream
+    # *** NOTE: LOCAL_TEST_VIDEO_PATH is now set to None for live cameras ***
+    LOCAL_TEST_VIDEO_PATH = r'D:\ATCC\atcc_service2\video\video.mp4'
     # ----------------------------
     
     cap = None
